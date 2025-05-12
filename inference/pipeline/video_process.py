@@ -15,6 +15,7 @@
 import gc
 import os
 import tempfile
+import math
 
 import ffmpeg
 import torch
@@ -385,3 +386,39 @@ def post_chunk_process(chunk: torch.Tensor, config: MagiConfig):
     gc.collect()
     torch.cuda.empty_cache()
     return chunk
+
+
+############################################
+# Process camera trajectory
+############################################
+def process_camera_trajectory(camera_data, config: MagiConfig) -> torch.Tensor:
+    """
+    Process camera trajectory data into embeddings for conditioning.
+    
+    Args:
+        camera_data: Camera trajectory data with shape [num_frames, 3, 4]
+        config: MagiConfig object
+        
+    Returns:
+        torch.Tensor: Camera embeddings with shape [num_chunks, 12]
+    """
+    # Convert camera matrix to flattened embeddings
+    # Each camera matrix is 3x4, flattened to a vector of size 12
+    camera_emb = camera_data.reshape(camera_data.shape[0], -1)  # [num_frames, 12]
+    
+    # Group the camera embeddings by chunks
+    chunk_width = config.runtime_config.chunk_width
+    num_chunks = math.ceil(camera_emb.shape[0] / chunk_width)
+    
+    # For each chunk, take the camera embedding of the middle frame in the chunk
+    chunk_camera_emb = []
+    for i in range(num_chunks):
+        start_idx = i * chunk_width
+        end_idx = min((i + 1) * chunk_width, camera_emb.shape[0])
+        if end_idx <= start_idx:
+            break
+        # Take the middle frame in the chunk
+    chunk_frames = camera_emb[start_idx:end_idx]
+    chunk_camera_emb.append(torch.mean(chunk_frames, dim=0))
+    
+    return torch.stack(chunk_camera_emb).to(torch.bfloat16)

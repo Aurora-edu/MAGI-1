@@ -1,0 +1,86 @@
+// {
+//     "version": "0.2.0",
+//     "configurations": [
+//         {
+//             "name": "Python: Train Camera MAGI",
+//             "type": "debugpy",
+//             "request": "launch",
+//             "program": "${workspaceFolder}/train_camera_magi.py",
+//             "args": [
+//                 "--dataset_path",
+//                 "/home/zhuyixuan05/ReCamMaster/example_test_data",
+//                 "--config_path",
+//                 "example/4.5B/4.5B_config.json",
+//                 "--output_path",
+//                 "./outputs/camera_model",
+//                 "--learning_rate",
+//                 "1e-5",
+//                 "--batch_size",
+//                 "1",
+//                 "--max_epochs",
+//                 "10",
+//                 "--steps_per_epoch",
+//                 "500",
+//                 "--num_workers",
+//                 "4",
+//                 "--use_gradient_checkpointing"
+//             ],
+//             "env": {
+//                 "MASTER_ADDR": "localhost",
+//                 "MASTER_PORT": "6009",
+//                 "GPUS_PER_NODE": "1",
+//                 "NNODES": "1",
+//                 "WORLD_SIZE": "1",
+//                 "CUDA_VISIBLE_DEVICES": "0",
+//                 "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True",
+//                 "OFFLOAD_T5_CACHE": "true",
+//                 "OFFLOAD_VAE_CACHE": "true",
+//                 "PYTHONPATH": "${workspaceFolder}:${PYTHONPATH}",
+//                 "SKIP_LOAD_MODEL":"true",
+
+//             },
+//             "console": "integratedTerminal",
+//             "logToFile": true
+//         }
+//     ]
+// }
+
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Python: Run inference pipeline",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/inference/pipeline/entry.py",
+            "args": [
+                "--config_file",
+                "example/4.5B/4.5B_config.json",
+                "--mode",
+                "t2v",
+                "--prompt",
+                "A Chinese woman is dancing",
+                "--output_path",
+                "example/assets/output_t2v.mp4"
+            ],
+            "env": {
+                "MASTER_ADDR": "localhost",
+                "MASTER_PORT": "6009",
+                "GPUS_PER_NODE": "1",
+                "NNODES": "1",
+                "WORLD_SIZE": "1",
+                "CUDA_VISIBLE_DEVICES": "1",
+                "PAD_HQ": "1",
+                "PAD_DURATION": "1",
+                "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True",
+                "OFFLOAD_T5_CACHE": "true",
+                "OFFLOAD_VAE_CACHE": "true",
+                //"SKIP_LOAD_MODEL":"true",
+                "TORCH_CUDA_ARCH_LIST": "8.9;9.0",
+                "PYTHONPATH": "${workspaceFolder}:${PYTHONPATH}"
+            },
+            "console": "integratedTerminal",
+            "logToFile": true
+        }
+    ]
+}

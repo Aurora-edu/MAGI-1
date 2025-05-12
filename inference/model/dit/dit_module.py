@@ -38,6 +38,7 @@ except:
 
 from torch import Tensor
 from torch.nn import Parameter
+import numpy as np
 
 from inference.common import EngineConfig, InferenceParams, ModelConfig, ModelMetaArgs, PackedCrossAttnParams, divide
 from inference.infra.distributed import parallel_state
@@ -354,6 +355,7 @@ class FusedLayerNorm(torch.nn.Module):
 
     def forward(self, input: Tensor) -> Tensor:
         weight = self.weight + 1 if self.zero_centered_gamma else self.weight
+        input = input.to(self.weight.dtype)
         return torch.nn.functional.layer_norm(input, self.hidden_size, weight, self.bias, self.eps)
 
 
@@ -958,6 +960,7 @@ class FullyParallelAttention(Attention):
         query = query.float()
         query = self.q_layernorm(query)
         query = query.transpose(0, 1).contiguous()
+        query = query.float()
         query = flash_apply_rotary_emb(query, cos_emb, sin_emb)
         query = query.to(original_dtype)
         return rearrange(query, "b sq hn hd -> (sq b) hn hd").contiguous()
@@ -975,6 +978,7 @@ class FullyParallelAttention(Attention):
         key = key.float()
         key = self.k_layernorm(key)
         key = key.transpose(0, 1).contiguous()
+        key = key.float()
         key = flash_apply_rotary_emb(key, cos_emb, sin_emb)
         key = key.to(original_dtype)
         return rearrange(key, "b sq hn hd -> (sq b) hn hd").contiguous()
@@ -1048,6 +1052,15 @@ class FullyParallelAttention(Attention):
             assert not (bs > 1 and meta_args.denoising_range_num > 1)
             q_range = meta_args.core_attn_params.np_q_range
             k_range = meta_args.core_attn_params.np_k_range
+            
+            # 检查q_range和k_range的形状，确保与denoising_range_num匹配
+            if q_range.shape[0] < meta_args.denoising_range_num:
+                # 如果q_range的第一维小于denoising_range_num，则复制第一行
+                q_range = np.tile(q_range[0:1], (meta_args.denoising_range_num, 1))
+            if k_range.shape[0] < meta_args.denoising_range_num:
+                # 如果k_range的第一维小于denoising_range_num，则复制第一行
+                k_range = np.tile(k_range[0:1], (meta_args.denoising_range_num, 1))
+                
             core_attn_outs = []
             for i in range(meta_args.denoising_range_num):
                 if bs == 1:
@@ -1278,6 +1291,37 @@ class TransformerLayer(torch.nn.Module):
         ## [Module 5: MLP PostNorm]
         self.mlp_post_norm = FusedLayerNorm(model_config=self.model_config, hidden_size=self.model_config.hidden_size)
 
+        ## [Module 6: Camera Conditioning]
+        # 不直接初始化，而是使用属性标记
+        self._camera_modules_initialized = False
+        
+    def _initialize_camera_modules(self):
+        """懒加载摄像机模块 - 仅在实际需要时初始化"""
+        if not hasattr(self, '_camera_modules_initialized') or not self._camera_modules_initialized:
+            # 获取当前设备和数据类型
+            device = next(self.parameters()).device
+            dtype = next(self.parameters()).dtype
+            
+            # 初始化相机编码器和投影器
+            self.cam_encoder = nn.Linear(12, self.model_config.hidden_size, device=device, dtype=dtype)
+            self.projector = nn.Linear(self.model_config.hidden_size, self.model_config.hidden_size, device=device, dtype=dtype)
+            
+            # 使用更好的初始化策略 - 小的随机值，而不是全零
+            with torch.no_grad():
+                self.cam_encoder.weight.data.normal_(0.0, 0.02)
+                self.cam_encoder.bias.data.zero_()
+                
+                # 投影器作为接近单位矩阵的初始化
+                identity = torch.eye(self.model_config.hidden_size, device=device, dtype=dtype)
+                self.projector.weight.copy_(identity + torch.randn_like(identity) * 0.01)
+                self.projector.bias.zero_()
+            
+            # 设置为训练模式以确保梯度流动
+            self.cam_encoder.train()
+            self.projector.train()
+            
+            self._camera_modules_initialized = True
+
     def _get_layer_offset(self):
         pipeline_rank = parallel_state.get_pp_rank()
 
@@ -1291,6 +1335,7 @@ class TransformerLayer(torch.nn.Module):
 
         return offset
 
+    # Modify the TransformerLayer.forward method to properly handle camera embeddings
     def forward(
         self,
         hidden_states: torch.Tensor,
@@ -1300,9 +1345,24 @@ class TransformerLayer(torch.nn.Module):
         rotary_pos_emb: torch.Tensor,
         inference_params: InferenceParams,
         meta_args: ModelMetaArgs,
+        cam_emb: torch.Tensor = None,
     ):
         # hidden_states: [s/cp/sp, b, h]
         residual = hidden_states
+ 
+        if cam_emb is not None:
+            if not self._camera_modules_initialized:
+                self._initialize_camera_modules()
+            
+            # 简单的编码和投影
+            cam_emb = self.cam_encoder(cam_emb)
+            cam_emb = self.projector(cam_emb)
+            
+            cam_emb = cam_emb.repeat(1, 2, 1)
+            cam_emb = cam_emb.unsqueeze(2).unsqueeze(3).repeat(1, 1, 30, 52, 1)
+            cam_emb = rearrange(cam_emb, 'b f h w d -> (f h w) b d')
+
+            hidden_states = hidden_states + cam_emb
 
         # Self attention.
         core_attn_out, cross_attn_out = self.self_attention(
@@ -1314,7 +1374,6 @@ class TransformerLayer(torch.nn.Module):
         )
 
         hidden_states = self.attn_post_process(core_attn_out, cross_attn_out, residual, condition, condition_map)
-
         return hidden_states
 
     def attn_post_process(
@@ -1408,7 +1467,7 @@ class TransformerBlock(torch.nn.Module):
         forward_step_func"""
         self.input_tensor = input_tensor
 
-    @torch.no_grad()
+    #@torch.no_grad()
     def forward(
         self,
         hidden_states: Tensor,
@@ -1418,6 +1477,7 @@ class TransformerBlock(torch.nn.Module):
         rotary_pos_emb: Tensor,
         inference_params: InferenceParams,
         meta_args: ModelMetaArgs,
+        cam_emb: Tensor = None,  # Added camera embeddings parameter
     ) -> torch.Tensor:
         if not self.pre_process:
             assert self.input_tensor is not None, "please call set_input_tensor for pp"
@@ -1432,6 +1492,7 @@ class TransformerBlock(torch.nn.Module):
                 rotary_pos_emb=rotary_pos_emb,
                 inference_params=inference_params,
                 meta_args=meta_args,
+                cam_emb=cam_emb,  # Pass camera embeddings to each layer
             )
 
         # Final layer norm.

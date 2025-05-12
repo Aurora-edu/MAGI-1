@@ -22,6 +22,7 @@ from inference.model.dit import get_dit
 from .prompt_process import get_txt_embeddings
 from .video_generate import generate_per_chunk
 from .video_process import post_chunk_process, process_image, process_prefix_video, save_video_to_disk
+from inference.pipeline.video_process import process_camera_trajectory
 
 
 class MagiPipeline:
@@ -31,25 +32,36 @@ class MagiPipeline:
         dist_init(self.config)
         print_rank_0(self.config)
 
-    def run_text_to_video(self, prompt: str, output_path: str):
-        self._run(prompt, None, output_path)
+    def run_text_to_video(self, prompt: str, output_path: str, camera_trajectory=None):
+        self._run(prompt, None, output_path, camera_trajectory)
 
-    def run_image_to_video(self, prompt: str, image_path: str, output_path: str):
+    def run_image_to_video(self, prompt: str, image_path: str, output_path: str, camera_trajectory=None):
         prefix_video = process_image(image_path, self.config)
-        self._run(prompt, prefix_video, output_path)
+        self._run(prompt, prefix_video, output_path, camera_trajectory)
 
-    def run_video_to_video(self, prompt: str, prefix_video_path: str, output_path: str):
+    def run_video_to_video(self, prompt: str, prefix_video_path: str, output_path: str, camera_trajectory=None):
         prefix_video = process_prefix_video(prefix_video_path, self.config)
-        self._run(prompt, prefix_video, output_path)
+        self._run(prompt, prefix_video, output_path, camera_trajectory)
 
-    def _run(self, prompt: str, prefix_video: torch.Tensor, output_path: str):
+    def _run(self, prompt: str, prefix_video: torch.Tensor, output_path: str, camera_trajectory=None):
         caption_embs, emb_masks = get_txt_embeddings(prompt, self.config)
         dit = get_dit(self.config)
+        
+        # Process camera trajectory if provided
+        camera_emb = None
+        if camera_trajectory is not None:
+            camera_emb = process_camera_trajectory(camera_trajectory, self.config)
+        
         videos = torch.cat(
             [
                 post_chunk_process(chunk, self.config)
                 for chunk in generate_per_chunk(
-                    model=dit, prompt=prompt, prefix_video=prefix_video, caption_embs=caption_embs, emb_masks=emb_masks
+                    model=dit, 
+                    prompt=prompt, 
+                    prefix_video=prefix_video, 
+                    caption_embs=caption_embs, 
+                    emb_masks=emb_masks,
+                    camera_emb=camera_emb
                 )
             ],
             dim=0,

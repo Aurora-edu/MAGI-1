@@ -111,7 +111,7 @@ class VideoDiTModel(torch.nn.Module):
             pW=self.patch_size,
         ).contiguous()
 
-    @torch.no_grad()
+    #@torch.no_grad()
     def get_embedding_and_meta(self, x, t, y, caption_dropout_mask, xattn_mask, kv_range, **kwargs):
         """
         Forward embedding and meta for VideoDiT.
@@ -260,7 +260,7 @@ class VideoDiTModel(torch.nn.Module):
 
         return (x, condition, condition_map, rope, y_xattn_flat, xattn_mask_for_cuda_graph, H, W, ardf_meta, cross_attn_params)
 
-    @torch.no_grad()
+    #@torch.no_grad()
     def forward_pre_process(
         self, x, t, y, caption_dropout_mask=None, xattn_mask=None, kv_range=None, **kwargs
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, ModelMetaArgs]:
@@ -338,7 +338,7 @@ class VideoDiTModel(torch.nn.Module):
 
         return (x, condition, condition_map, y_xattn_flat, rope, meta_args)
 
-    @torch.no_grad()
+    #@torch.no_grad()
     def forward_post_process(self, x, meta_args: ModelMetaArgs) -> torch.Tensor:
         x = x.float()
         # embedder context will ensure that the processing is in high precision even if the embedder params is in bfloat16 mode
@@ -359,7 +359,7 @@ class VideoDiTModel(torch.nn.Module):
 
         return x
 
-    @torch.no_grad()
+    #@torch.no_grad()
     def forward(
         self,
         x,
@@ -369,6 +369,7 @@ class VideoDiTModel(torch.nn.Module):
         xattn_mask=None,
         kv_range=None,
         inference_params: InferenceParams = None,
+        cam_emb=None,
         **kwargs,
     ) -> torch.Tensor:
         (x, condition, condition_map, y_xattn_flat, rope, meta_args) = self.forward_pre_process(
@@ -390,6 +391,7 @@ class VideoDiTModel(torch.nn.Module):
             rotary_pos_emb=rope,
             inference_params=inference_params,
             meta_args=meta_args,
+            cam_emb=cam_emb,
         )
 
         if not self.post_process:

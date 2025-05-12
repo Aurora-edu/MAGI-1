@@ -14,6 +14,7 @@
 
 import argparse
 import sys
+import torch
 
 from inference.pipeline import MagiPipeline
 
@@ -28,6 +29,7 @@ def parse_arguments():
     parser.add_argument('--image_path', type=str, help='Path to the image file (for i2v mode).')
     parser.add_argument('--prefix_video_path', type=str, help='Path to the prefix video file (for v2v mode).')
     parser.add_argument('--output_path', type=str, required=True, help='Path to save the output video.')
+    parser.add_argument('--camera_trajectory_path', type=str, help='Path to the camera trajectory file (optional).')
     return parser.parse_args()
 
 
@@ -35,19 +37,28 @@ def main():
     args = parse_arguments()
 
     pipeline = MagiPipeline(args.config_file)
+    
+    # Load camera trajectory if provided
+    camera_trajectory = None
+    if args.camera_trajectory_path:
+        try:
+            camera_trajectory = torch.load(args.camera_trajectory_path)
+        except Exception as e:
+            print(f"Error loading camera trajectory: {e}")
+            print("Continuing without camera conditioning.")
 
     if args.mode == 't2v':
-        pipeline.run_text_to_video(prompt=args.prompt, output_path=args.output_path)
+        pipeline.run_text_to_video(prompt=args.prompt, output_path=args.output_path, camera_trajectory=camera_trajectory)
     elif args.mode == 'i2v':
         if not args.image_path:
             print("Error: --image_path is required for i2v mode.")
             sys.exit(1)
-        pipeline.run_image_to_video(prompt=args.prompt, image_path=args.image_path, output_path=args.output_path)
+        pipeline.run_image_to_video(prompt=args.prompt, image_path=args.image_path, output_path=args.output_path, camera_trajectory=camera_trajectory)
     elif args.mode == 'v2v':
         if not args.prefix_video_path:
             print("Error: --prefix_video_path is required for v2v mode.")
             sys.exit(1)
-        pipeline.run_video_to_video(prompt=args.prompt, prefix_video_path=args.prefix_video_path, output_path=args.output_path)
+        pipeline.run_video_to_video(prompt=args.prompt, prefix_video_path=args.prefix_video_path, output_path=args.output_path, camera_trajectory=camera_trajectory)
 
 
 if __name__ == "__main__":

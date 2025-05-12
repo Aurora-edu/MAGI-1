@@ -43,6 +43,7 @@ class InferenceInput:
     task_idx_list: List[int] = None
     report_chunk_num_list: List[int] = None
     chunk_num: int = None
+    camera_emb: Union[torch.Tensor, None] = None  # Added camera embeddings field
 
 
 def _process_txt_embeddings(
@@ -81,7 +82,12 @@ def _process_null_embeddings(
 
 @torch.inference_mode()
 def extract_feature_for_inference(
-    model: torch.nn.Module, prompt: str, prefix_video: torch.Tensor, caption_embs: torch.Tensor, emb_masks: torch.Tensor
+    model: torch.nn.Module, 
+    prompt: str, 
+    prefix_video: torch.Tensor, 
+    caption_embs: torch.Tensor, 
+    emb_masks: torch.Tensor,
+    camera_emb: torch.Tensor = None  # Added camera embeddings parameter
 ) -> InferenceInput:
     model_config = model.model_config
     runtime_config = model.runtime_config
@@ -133,6 +139,7 @@ def extract_feature_for_inference(
         task_idx_list=[0],
         report_chunk_num_list=[infer_chunk_num - clean_chunk_num],
         chunk_num=latent_size_t // runtime_config.chunk_width,
+        camera_emb=camera_emb,  # Include camera embeddings
     )
 
 
@@ -648,6 +655,12 @@ class SampleTransport:
             )
 
         # 7. Model forward
+        cam_emb = None
+        if self.transport_inputs[infer_idx].camera_emb is not None:
+            cam_idx = chunk_start - chunk_offset
+            if 0 <= cam_idx < self.transport_inputs[infer_idx].camera_emb.size(0):
+                cam_emb = self.transport_inputs[infer_idx].camera_emb[cam_idx]
+
         forward_fn = find_dit_model(self.model).forward_dispatcher
         nearly_clean_chunk_t = t[0, int(model_kwargs["fwd_extra_1st_chunk"])].item()
         model_kwargs["distill_nearly_clean_chunk"] = (
@@ -661,6 +674,7 @@ class SampleTransport:
             mask=mask_chunk_flatten,
             kv_range=kv_range,
             inference_params=self.inference_params[infer_idx],
+            cam_emb=cam_emb,  # Pass camera embeddings
             **model_kwargs,
         )
         self.x_chunks[infer_idx] = x_chunk
@@ -755,10 +769,17 @@ class SampleTransport:
 
 
 def generate_per_chunk(
-    model: torch.nn.Module, prompt: str, prefix_video: torch.Tensor, caption_embs: torch.Tensor, emb_masks: torch.Tensor
+    model: torch.nn.Module, 
+    prompt: str, 
+    prefix_video: torch.Tensor, 
+    caption_embs: torch.Tensor, 
+    emb_masks: torch.Tensor, 
+    camera_emb: torch.Tensor = None  # Added camera embeddings parameter
 ) -> Generator[Tuple[int, int, int, int, int, torch.Tensor], None, None]:
     device = f"cuda:{torch.cuda.current_device()}"
-    transport_inputs: InferenceInput = extract_feature_for_inference(model, prompt, prefix_video, caption_embs, emb_masks)
+    transport_inputs: InferenceInput = extract_feature_for_inference(
+        model, prompt, prefix_video, caption_embs, emb_masks, camera_emb
+    )
     sample_transport = SampleTransport(model=model, transport_inputs=[transport_inputs], device=device)
     for _, _, chunk in sample_transport.walk():
         yield chunk
